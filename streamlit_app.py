@@ -257,13 +257,15 @@ if 'RSI' in indicateurs:
 def telecharger_donnees(ticker, start, end, intervalle):
     try:
         data = yf.download(ticker, start=start, end=end, interval=intervalle)
-        data = data.asfreq('B')  # Fréquence business day
-        data = data.fillna(method='ffill')  # Remplir les valeurs manquantes
+        if intervalle not in ['1wk', '1mo']:
+            data = data.asfreq('B')  # Fixe la fréquence uniquement pour des intervalles plus courts
+        if data.isnull().values.any():
+            data = data.fillna(method='ffill')  # Remplir les valeurs manquantes
         return data
     except Exception as e:
         st.error(f"{lang['error_downloading_data']} {e}")
         return pd.DataFrame()
-
+    
 data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
 
 # Vérifier si les données sont disponibles
