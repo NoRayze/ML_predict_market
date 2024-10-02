@@ -4,7 +4,6 @@ datetime
 plotly
 ta
 tensorflow==2.17.0
-pmdarima==1.8.5
-Cython 
+pmdarima==1.8.5 
 scipy 
 statsmodels
