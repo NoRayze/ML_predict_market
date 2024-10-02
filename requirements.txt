@@ -1,1 +1,11 @@
 streamlit
+yfinance 
+datetime
+plotly
+ta
+pandas
+sklearn
+numpy
+pmdarima
+tensorflow
+warnings
