@@ -343,13 +343,17 @@ else:
     # Sélection du type de graphique
     if chart_type == lang['candlestick']:
         fig.add_trace(go.Candlestick(
-            x=model_data.index,
-            open=data['Open'],
-            high=data['High'],
-            low=data['Low'],
-            close=model_data['Close'],
-            name=actif_selectionne
+        x=model_data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=model_data['Close'],
+        name=actif_selectionne,
+        increasing_line_color='green',  # couleur pour chandeliers haussiers
+        decreasing_line_color='red',  # couleur pour chandeliers baissiers
+        width=0.8  # Ajuster la largeur des barres
         ))
+
     elif chart_type == lang['line']:
         fig.add_trace(go.Scatter(
             x=model_data.index,
