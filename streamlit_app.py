@@ -20,7 +20,7 @@ st.set_page_config(layout="wide")
 
 languages = {
     'Français': {
-        'title': '📈 Tableau de Bord des Marchés Financiers Amélioré',
+        'title': '📈 Tableau de Bord des Marchés Financiers',
         'language_selection': 'Sélectionnez la langue :',
         'enter_ticker': 'Entrez le ticker de l\'actif (ex: AAPL, TSLA, BTC-USD, CW8.PA):',
         'or_select_asset': 'Ou sélectionnez un actif dans la liste :',
