@@ -221,7 +221,7 @@ background_color = st.sidebar.color_picker(lang['background_color'], '#111111')
 grid_color = st.sidebar.color_picker(lang['grid_color'], '#333333')
 
 # Sélection de l'intervalle de temps pour chaque bougie
-intervalle = st.sidebar.selectbox(lang['interval'], ['1d', '1wk', '1mo'])
+intervalle = st.sidebar.selectbox(lang['interval'], ['1h','1d', '1wk', '1mo'])
 
 # Sélection de la plage de dates
 st.sidebar.subheader(lang['use_all_data'])
