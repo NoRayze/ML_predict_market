@@ -220,8 +220,8 @@ main_color = st.sidebar.color_picker(lang['main_color'], '#1f77b4')
 background_color = st.sidebar.color_picker(lang['background_color'], '#111111')
 grid_color = st.sidebar.color_picker(lang['grid_color'], '#333333')
 
-# Sélection de l'intervalle de temps
-intervalle = st.sidebar.selectbox(lang['interval'], ['1h', '1d', '1wk', '1mo'])
+# Sélection de l'intervalle de temps pour chaque bougie
+intervalle = st.sidebar.selectbox(lang['interval'], ['1d', '1wk', '1mo'])
 
 # Sélection de la plage de dates
 st.sidebar.subheader(lang['use_all_data'])
@@ -257,16 +257,13 @@ if 'RSI' in indicateurs:
 def telecharger_donnees(ticker, start, end, intervalle):
     try:
         data = yf.download(ticker, start=start, end=end, interval=intervalle)
-        if data.isnull().values.any():
-            data = data.fillna(method='ffill')  # Remplir les valeurs manquantes
         return data
-    except Exception as e:
-        st.error(f"{lang['error_downloading_data']} {e}")
+    except:
         return pd.DataFrame()
-    
+
 data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
 
-# Vérifier si les données sont disponibles
+# Vérification des données
 if data.empty:
     st.error(lang['no_data'])
     st.stop()
@@ -341,29 +338,25 @@ else:
     # Sélection du type de graphique
     if chart_type == lang['candlestick']:
         fig.add_trace(go.Candlestick(
-        x=model_data.index,
-        open=data['Open'],
-        high=data['High'],
-        low=data['Low'],
-        close=model_data['Close'],
-        name=actif_selectionne,
-        increasing_line_color='green',  # couleur pour chandeliers haussiers
-        decreasing_line_color='red',  # couleur pour chandeliers baissiers
-        width=0.8  # Ajuster la largeur des barres
+            x=data.index,
+            open=data['Open'],
+            high=data['High'],
+            low=data['Low'],
+            close=data['Close'],
+            name=actif_selectionne
         ))
-
     elif chart_type == lang['line']:
         fig.add_trace(go.Scatter(
-            x=model_data.index,
-            y=model_data['Close'],
+            x=data.index,
+            y=data['Close'],
             mode='lines',
             name=actif_selectionne,
             line=dict(color=main_color)
         ))
     elif chart_type == lang['bar']:
         fig.add_trace(go.Bar(
-            x=model_data.index,
-            y=model_data['Close'],
+            x=data.index,
+            y=data['Close'],
             name=actif_selectionne,
             marker_color=main_color
         ))
