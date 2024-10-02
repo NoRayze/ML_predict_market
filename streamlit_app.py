@@ -257,8 +257,6 @@ if 'RSI' in indicateurs:
 def telecharger_donnees(ticker, start, end, intervalle):
     try:
         data = yf.download(ticker, start=start, end=end, interval=intervalle)
-        if intervalle not in ['1wk', '1mo']:
-            data = data.asfreq('B')  # Fixe la fréquence uniquement pour des intervalles plus courts
         if data.isnull().values.any():
             data = data.fillna(method='ffill')  # Remplir les valeurs manquantes
         return data
