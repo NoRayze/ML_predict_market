@@ -1,26 +1,33 @@
-import streamlit as st
-import yfinance as yf
-from datetime import datetime, timedelta
-import plotly.graph_objects as go
-import ta
-import pandas as pd
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-import numpy as np
-import tensorflow as tf
-from sklearn.preprocessing import MinMaxScaler
 import warnings
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+import ta
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import yfinance as yf
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
+
+# Suppression des avertissements
 warnings.filterwarnings("ignore")
 
-# Configuration de la page
+# ==============================================
+# Configuration de la Page
+# ==============================================
 st.set_page_config(layout="wide")
 
 # ==============================================
 # Internationalisation (i18n)
 # ==============================================
-
 languages = {
     'Français': {
-        'title': '📈 Tableau de Bord des Marchés Financiers',
+        'title': '📈 Tableau de Bord des Marchés Financiers Amélioré',
         'language_selection': 'Sélectionnez la langue :',
         'enter_ticker': 'Entrez le ticker de l\'actif (ex: AAPL, TSLA, BTC-USD, CW8.PA):',
         'or_select_asset': 'Ou sélectionnez un actif dans la liste :',
@@ -59,7 +66,7 @@ languages = {
         'arima': 'ARIMA',
         'lstm': 'LSTM',
         'no_model': 'Aucun',
-        'model_parameters': 'Paramètres du Modèle',
+        'model_parameters': 'Paramètres du Modèle LSTM',
         'evaluate_model': 'Évaluer le modèle',
         'mse': 'Erreur Quadratique Moyenne (MSE) :',
         'mae': 'Erreur Absolue Moyenne (MAE) :',
@@ -74,14 +81,6 @@ languages = {
         'training_lstm': 'Entraînement du modèle LSTM...',
         'error_downloading_data': 'Erreur lors du téléchargement des données :',
         'error_in_arima': 'Erreur dans le modèle ARIMA :',
-        'trading_strategy_parameters': 'Paramètres de la Stratégie de Trading',
-        'trading_frequency': 'Fréquence de Trading',
-        'transaction_costs': 'Frais de Transaction',
-        'type_of_transaction_fee': 'Type de Frais de Transaction',
-        'fixed': 'Fixe',
-        'percentage': 'Pourcentage',
-        'fixed_transaction_fee': 'Frais de Transaction Fixe (€)',
-        'transaction_fee_percentage': 'Frais de Transaction (%)',
     },
     'English': {
         'title': '📈 Enhanced Financial Markets Dashboard',
@@ -123,7 +122,7 @@ languages = {
         'arima': 'ARIMA',
         'lstm': 'LSTM',
         'no_model': 'None',
-        'model_parameters': 'Model Parameters',
+        'model_parameters': 'LSTM Model Parameters',
         'evaluate_model': 'Evaluate Model',
         'mse': 'Mean Squared Error (MSE):',
         'mae': 'Mean Absolute Error (MAE):',
@@ -138,29 +137,35 @@ languages = {
         'training_lstm': 'Training LSTM model...',
         'error_downloading_data': 'Error downloading data:',
         'error_in_arima': 'Error in ARIMA model:',
-        'trading_strategy_parameters': 'Trading Strategy Parameters',
-        'trading_frequency': 'Trading Frequency',
-        'transaction_costs': 'Transaction Costs',
-        'type_of_transaction_fee': 'Type of Transaction Fee',
-        'fixed': 'Fixed',
-        'percentage': 'Percentage',
-        'fixed_transaction_fee': 'Fixed Transaction Fee (€)',
-        'transaction_fee_percentage': 'Transaction Fee (%)',
     }
 }
 
+# Initialiser les variables de session
+if 'model_trained' not in st.session_state:
+    st.session_state.model_trained = False
+if 'predictions_unscaled' not in st.session_state:
+    st.session_state.predictions_unscaled = None
+if 'actuals_unscaled' not in st.session_state:
+    st.session_state.actuals_unscaled = None
+if 'mse' not in st.session_state:
+    st.session_state.mse = None
+if 'mae' not in st.session_state:
+    st.session_state.mae = None
+if 'future_predictions' not in st.session_state:
+    st.session_state.future_predictions = None
+if 'future_dates' not in st.session_state:
+    st.session_state.future_dates = None
+
 # Sélection de la langue
-language = st.sidebar.selectbox("Sélectionnez la langue / Select language:", ['Français', 'English'])
+language = st.sidebar.selectbox(languages['Français']['language_selection'], ['Français', 'English'])
 lang = languages[language]
 
 # Titre de l'application
 st.title(lang['title'])
 
 # ==============================================
-# Barre latérale pour la sélection
+# Barre Latérale : Sélection de l'Actif
 # ==============================================
-
-# Champ de saisie pour le ticker
 st.sidebar.header(lang['enter_ticker'])
 ticker_input = st.sidebar.text_input(lang['enter_ticker'], value="AAPL")
 
@@ -202,16 +207,20 @@ assets = {
     }
 }
 
-asset_category = st.sidebar.selectbox("", list(assets.keys()))
-asset_name = st.sidebar.selectbox("", list(assets[asset_category].keys()))
+asset_category = st.sidebar.selectbox("Sélectionnez une catégorie d'actifs / Select asset category:", list(assets.keys()))
+asset_name = st.sidebar.selectbox("Sélectionnez un actif / Select an asset:", list(assets[asset_category].keys()))
 selected_ticker = assets[asset_category][asset_name]
 
-# Si aucun ticker n'est saisi manuellement, utiliser le ticker sélectionné
+# Utiliser le ticker sélectionné si aucun ticker manuel n'est saisi
 if not ticker_input or ticker_input.strip() == '':
     ticker_input = selected_ticker
 
-# Sélection du type de graphique
+# ==============================================
+# Barre Latérale : Personnalisation du Graphique
+# ==============================================
 st.sidebar.header(lang['chart_customization'])
+
+# Type de graphique
 chart_type = st.sidebar.selectbox(lang['chart_type'], [lang['candlestick'], lang['line'], lang['bar']])
 
 # Personnalisation des couleurs
@@ -220,21 +229,46 @@ main_color = st.sidebar.color_picker(lang['main_color'], '#1f77b4')
 background_color = st.sidebar.color_picker(lang['background_color'], '#111111')
 grid_color = st.sidebar.color_picker(lang['grid_color'], '#333333')
 
-# Sélection de l'intervalle de temps pour chaque bougie
-intervalle = st.sidebar.selectbox(lang['interval'], ['1h','1d', '1wk', '1mo'])
+# Intervalle de temps des bougies
+interval_options = ['1h', '1d', '1wk', '1mo']
+interval_label = lang['interval']
+intervalle = st.sidebar.selectbox(interval_label, interval_options)
 
 # Sélection de la plage de dates
 st.sidebar.subheader(lang['use_all_data'])
 use_all_data = st.sidebar.checkbox(lang['use_all_data'])
 
 if use_all_data:
-    date_debut = None  # yfinance accepte None pour récupérer toutes les données disponibles
     date_fin = datetime.now()
+    if intervalle == '1h':
+        date_debut = date_fin - timedelta(days=729)  # Limite de 729 jours pour rester en dessous de 730
+    else:
+        date_debut = None  # yfinance accepte None pour récupérer toutes les données disponibles
 else:
-    date_debut = st.sidebar.date_input(lang['start_date'], value=datetime.now() - timedelta(days=365))
-    date_fin = st.sidebar.date_input(lang['end_date'], value=datetime.now())
+    if intervalle == '1h':
+        default_start_date = (datetime.now() - timedelta(days=729)).date()
+        date_debut_input = st.sidebar.date_input(lang['start_date'], value=default_start_date)
+        min_start_date = (datetime.now() - timedelta(days=729)).date()
+        # Convertir les dates en datetime.datetime pour la comparaison
+        date_debut = datetime.combine(date_debut_input, datetime.min.time())
+        max_start_date = datetime.combine(min_start_date, datetime.min.time())
+        if date_debut < max_start_date:
+            st.sidebar.warning(f"Pour l'intervalle 1h, la date de début ne peut pas être antérieure à {min_start_date}.")
+            date_debut = max_start_date
+    else:
+        date_debut_input = st.sidebar.date_input(lang['start_date'], value=(datetime.now().date() - timedelta(days=365)))
+        date_debut = datetime.combine(date_debut_input, datetime.min.time())
+    date_fin_input = st.sidebar.date_input(lang['end_date'], value=datetime.now().date())
+    date_fin = datetime.combine(date_fin_input, datetime.min.time())
 
-# Sélection des indicateurs techniques
+    # Vérifier que la plage de dates est valide
+    if date_debut and date_fin and date_debut > date_fin:
+        st.sidebar.error("La date de début doit être antérieure à la date de fin.")
+        st.stop()
+
+# ==============================================
+# Barre Latérale : Indicateurs Techniques
+# ==============================================
 st.sidebar.header(lang['technical_indicators'])
 indicateurs = st.sidebar.multiselect(lang['select_indicators'], ['SMA', 'EMA', 'RSI', 'MACD', 'Bandes de Bollinger'])
 
@@ -242,26 +276,69 @@ indicateurs = st.sidebar.multiselect(lang['select_indicators'], ['SMA', 'EMA', '
 sma_periods = []
 ema_periods = []
 periode_RSI = 14  # Valeur par défaut pour la période RSI
+selected_SMA = None
+
 if 'SMA' in indicateurs:
     sma_periods = st.sidebar.multiselect(lang['select_sma_periods'], [5, 10, 20, 50, 100, 200], default=[20])
+    if sma_periods:
+        selected_SMA = sma_periods[0]  # Sélectionner le premier SMA pour le modèle
+
 if 'EMA' in indicateurs:
     ema_periods = st.sidebar.multiselect(lang['select_ema_periods'], [5, 10, 20, 50, 100, 200], default=[20])
+
 if 'RSI' in indicateurs:
     periode_RSI = st.sidebar.number_input(lang['rsi_period'], min_value=1, value=14)
 
 # ==============================================
-# Optimisation des performances
+# Barre Latérale : Modèle de Prédiction
 # ==============================================
+st.sidebar.header(lang['prediction_model'])
+model_choice = st.sidebar.selectbox(lang['select_model'], [lang['no_model'], 'LSTM'])
 
+# Prévision
+st.sidebar.subheader(lang['forecasting'])
+periods_to_predict = st.sidebar.number_input(lang['periods_to_predict'], min_value=1, max_value=365, value=30)
+
+# ==============================================
+# Barre Latérale : Paramètres du Modèle LSTM
+# ==============================================
+if model_choice == 'LSTM':
+    st.sidebar.header(lang['model_parameters'])
+    epochs = st.sidebar.number_input('Époques (Epochs)', min_value=1, max_value=100, value=20, step=1)
+    batch_size = st.sidebar.number_input('Taille de lot (Batch Size)', min_value=16, max_value=512, value=32, step=16)
+    seq_length = st.sidebar.number_input('Longueur de séquence (Sequence Length)', min_value=10, max_value=200, value=60, step=10)
+
+# ==============================================
+# Fonction de Téléchargement des Données
+# ==============================================
 @st.cache_data
 def telecharger_donnees(ticker, start, end, intervalle):
     try:
         data = yf.download(ticker, start=start, end=end, interval=intervalle)
+        if data.empty:
+            raise ValueError(f"Aucune donnée trouvée pour le ticker {ticker} avec l'intervalle {intervalle}.")
         return data
-    except:
+    except Exception as e:
+        st.error(f"{lang['error_downloading_data']} {e}")
         return pd.DataFrame()
 
-data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
+# Gestion des dates en fonction de l'intervalle
+if intervalle == '1h' and use_all_data:
+    data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
+elif not use_all_data and intervalle == '1h':
+    # Pour '1h' avec dates manuelles, assurez-vous que date_debut >= date_fin - 729 jours
+    max_start_date = date_fin - timedelta(days=729)
+    if date_debut < max_start_date:
+        st.sidebar.warning(f"Pour l'intervalle 1h, la date de début ne peut pas être antérieure à {max_start_date.date()}.")
+        date_debut = max_start_date
+    data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
+else:
+    data = telecharger_donnees(ticker_input, date_debut, date_fin, intervalle)
+
+# Afficher les dates utilisées pour le téléchargement (pour débogage)
+st.write(f"**Date de début pour téléchargement :** {date_debut}")
+st.write(f"**Date de fin pour téléchargement :** {date_fin}")
+st.write(f"**Intervalle :** {intervalle}")
 
 # Vérification des données
 if data.empty:
@@ -270,7 +347,9 @@ if data.empty:
 else:
     actif_selectionne = ticker_input.upper()
 
-    # Calcul des indicateurs techniques
+    # ==============================================
+    # Fonction de Calcul des Indicateurs Techniques
+    # ==============================================
     @st.cache_data
     def calculer_indicateurs(data, indicateurs, sma_periods, ema_periods, periode_RSI):
         data = data.copy()  # Éviter de modifier les données originales
@@ -297,45 +376,323 @@ else:
     data = calculer_indicateurs(data, indicateurs, sma_periods, ema_periods, periode_RSI)
 
     # ==============================================
-    # Sélection du modèle de prédiction
+    # Préparation des Séquences pour le Modèle LSTM
     # ==============================================
-    st.sidebar.header(lang['prediction_model'])
-    model_choice = st.sidebar.selectbox(lang['select_model'], [lang['no_model'], 'ARIMA', 'LSTM'])
 
-    # Préparer les données pour les modèles
-    model_data = data[['Close']].dropna()
+    if model_choice == 'LSTM':
+        # Sélection des caractéristiques pour le modèle
+        feature_columns = ['Open', 'Close', 'High', 'Low']
+        if selected_SMA:
+            feature_columns.append(f'SMA_{selected_SMA}')
+        # Assurez-vous que la SMA sélectionnée existe dans les données
+        model_data = data[feature_columns].dropna()
 
-    # Entrée pour le nombre de périodes futures à prédire
-    st.sidebar.subheader(lang['forecasting'])
-    periods_to_predict = st.sidebar.number_input(lang['periods_to_predict'], min_value=1, max_value=365, value=30)
+        # Mise à l'échelle des données
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(model_data)
 
-    # Ajouter des entrées pour les paramètres de backtesting
-    st.sidebar.subheader("Backtesting Parameters")
-    train_window_size = st.sidebar.number_input("Training Window Size (days)", min_value=30, value=200)
-    prediction_window_size = st.sidebar.number_input("Prediction Window Size (days)", min_value=1, value=20)
-    step_size = st.sidebar.number_input("Step Size (days)", min_value=1, value=20)
+        # Création des séquences
+        def create_sequences(data, seq_length):
+            X = []
+            Y = []
+            for i in range(len(data) - seq_length):
+                X.append(data[i:i + seq_length])
+                Y.append(data[i + seq_length])
+            return np.array(X), np.array(Y)
 
-    # Ajouter la sélection de la temporalité des décisions
-    st.sidebar.subheader(lang['trading_strategy_parameters'])
-    trading_frequency = st.sidebar.selectbox(lang['trading_frequency'], options=["Daily", "Weekly", "Monthly"])
+        X, Y = create_sequences(scaled_data, seq_length)
 
-    # Ajouter les frais de transaction
-    st.sidebar.subheader(lang['transaction_costs'])
-    transaction_fee_type = st.sidebar.selectbox(lang['type_of_transaction_fee'], options=[lang['fixed'], lang['percentage']])
-    if transaction_fee_type == lang['fixed']:
-        transaction_fee = st.sidebar.number_input(lang['fixed_transaction_fee'], min_value=0.0, value=1.0, step=0.1)
-    else:
-        transaction_fee = st.sidebar.number_input(lang['transaction_fee_percentage'], min_value=0.0, max_value=100.0, value=0.1, step=0.1) / 100
+        # Définir les tailles des ensembles
+        total_samples = X.shape[0]
+        train_size = int(0.8 * total_samples)
+        valid_size = int(0.1 * total_samples)
+        test_size = total_samples - train_size - valid_size
 
-    # Vérifier la taille des données
-    if train_window_size >= len(model_data['Close']):
-        st.error("La taille de la fenêtre d'entraînement est trop grande pour la quantité de données disponible.")
-        st.stop()
+        X_train = X[:train_size]
+        Y_train = Y[:train_size]
 
-    # Création du graphique principal
+        X_valid = X[train_size:train_size + valid_size]
+        Y_valid = Y[train_size:train_size + valid_size]
+
+        X_test = X[train_size + valid_size:]
+        Y_test = Y[train_size + valid_size:]
+
+        # Conversion en tenseurs PyTorch
+        X_train_tensor = torch.tensor(X_train).float()
+        Y_train_tensor = torch.tensor(Y_train).float()
+
+        X_valid_tensor = torch.tensor(X_valid).float()
+        Y_valid_tensor = torch.tensor(Y_valid).float()
+
+        X_test_tensor = torch.tensor(X_test).float()
+        Y_test_tensor = torch.tensor(Y_test).float()
+
+        # Création des datasets et dataloaders
+        batch_size = batch_size  # Utiliser la valeur définie dans la sidebar
+
+        train_dataset = TensorDataset(X_train_tensor, Y_train_tensor)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
+        valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+
+        test_dataset = TensorDataset(X_test_tensor, Y_test_tensor)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # ==============================================
+        # Définition du Modèle LSTM avec PyTorch
+        # ==============================================
+        class NeuralNetwork(nn.Module):
+            def __init__(self, input_size, hidden_size, num_layers, output_size):
+                super(NeuralNetwork, self).__init__()
+                self.hidden_size = hidden_size
+                self.num_layers = num_layers
+                self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+                self.fc = nn.Linear(hidden_size, output_size)
+
+            def forward(self, x):
+                # Vérifiez si x a une seule séquence (pas de "batch"), modifiez h0 et c0 en conséquence
+                if len(x.shape) == 2:  # si x est (seq_length, input_size) -> convertir en (1, seq_length, input_size)
+                    x = x.unsqueeze(0)
+
+                # Initialisation des états cachés avec les bonnes dimensions
+                h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)  # h0: (num_layers, batch_size, hidden_size)
+                c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)  # c0: (num_layers, batch_size, hidden_size)
+
+                out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size)
+                out = self.fc(out[:, -1, :])    # Prendre la sortie de la dernière étape de temps
+                return out
+
+        input_size = X_train.shape[2]  # Nombre de caractéristiques
+        hidden_size = 64
+        num_layers = 2
+        output_size = Y_train.shape[1]  # Nombre de caractéristiques à prédire
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = NeuralNetwork(input_size, hidden_size, num_layers, output_size).to(device)
+
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        criterion = nn.MSELoss()
+
+        # ==============================================
+        # Fonctions d'Entraînement et d'Évaluation
+        # ==============================================
+        def train_model(model, dataloader, optimizer, criterion):
+            model.train()
+            epoch_loss = 0
+            for X_batch, Y_batch in dataloader:
+                X_batch = X_batch.to(device)
+                Y_batch = Y_batch.to(device)
+
+                optimizer.zero_grad()
+                predictions = model(X_batch)
+                loss = criterion(predictions, Y_batch)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item() * X_batch.size(0)
+            return epoch_loss / len(dataloader.dataset)
+
+        def evaluate_model(model, dataloader, criterion):
+            model.eval()
+            epoch_loss = 0
+            with torch.no_grad():
+                for X_batch, Y_batch in dataloader:
+                    X_batch = X_batch.to(device)
+                    Y_batch = Y_batch.to(device)
+                    predictions = model(X_batch)
+                    loss = criterion(predictions, Y_batch)
+                    epoch_loss += loss.item() * X_batch.size(0)
+            return epoch_loss / len(dataloader.dataset)
+
+        # ==============================================
+        # Entraînement du Modèle
+        # ==============================================
+        if model_choice == 'LSTM':
+            if st.sidebar.button(lang['evaluate_model']):
+                with st.spinner('Entraînement du modèle LSTM en cours...'):
+                    epochs_to_run = epochs
+                    for epoch in range(1, epochs_to_run + 1):
+                        train_loss = train_model(model, train_dataloader, optimizer, criterion)
+                        valid_loss = evaluate_model(model, valid_dataloader, criterion)
+                        st.write(f"Époque {epoch}/{epochs_to_run} - Perte d'entraînement: {train_loss:.4f} - Perte de validation: {valid_loss:.4f}")
+
+                # Marquer que le modèle a été entraîné
+                st.session_state.model_trained = True
+
+                # ==============================================
+                # Prédictions sur l'Ensemble de Test
+                # ==============================================
+                model.eval()
+                predictions = []
+                actuals = []
+                with torch.no_grad():
+                    for X_batch, Y_batch in test_dataloader:
+                        X_batch = X_batch.to(device)
+                        Y_batch = Y_batch.to(device)
+                        preds = model(X_batch)
+                        predictions.append(preds.cpu().numpy())
+                        actuals.append(Y_batch.cpu().numpy())
+
+                predictions = np.concatenate(predictions, axis=0)
+                actuals = np.concatenate(actuals, axis=0)
+
+                # Inversion de la mise à l'échelle
+                predictions_unscaled = scaler.inverse_transform(predictions)
+                actuals_unscaled = scaler.inverse_transform(actuals)
+
+                # Stocker les résultats dans la session
+                st.session_state.predictions_unscaled = predictions_unscaled
+                st.session_state.actuals_unscaled = actuals_unscaled
+
+                # ==============================================
+                # Calcul des Métriques de Performance
+                # ==============================================
+                mse = mean_squared_error(actuals_unscaled, predictions_unscaled)
+                mae = mean_absolute_error(actuals_unscaled, predictions_unscaled)
+
+                st.session_state.mse = mse
+                st.session_state.mae = mae
+
+                # Génération des Prédictions Futures
+                with st.spinner('Génération des prédictions futures...'):
+                    future_predictions = []
+                    future_dates = []
+                    last_sequence = scaled_data[-seq_length:].tolist()  # Récupération de la dernière séquence d'entrée
+
+                    # Vérifiez si last_sequence est bien une liste de listes (et non un seul élément)
+                    if not isinstance(last_sequence[0], list):
+                        last_sequence = [last_sequence]
+
+                    # Générer les prédictions futures pour le nombre de périodes spécifiées
+                    for _ in range(periods_to_predict):
+                        input_seq = torch.tensor(last_sequence).float().to(device)  # Pas besoin de doubler les crochets ici
+                        with torch.no_grad():
+                            # Prédiction avec le modèle
+                            future_pred = model(input_seq).cpu().numpy()[0]
+                        
+                        # Ajouter la prédiction à la liste des futures prédictions
+                        future_predictions.append(future_pred)
+                        
+                        # Mettre à jour la séquence en ajoutant la nouvelle prédiction et en supprimant la première valeur
+                        last_sequence = last_sequence[1:] + [future_pred.tolist()]  # Assurez-vous que future_pred est converti en liste
+
+                    # Inverser la mise à l'échelle des prédictions futures
+                    future_predictions_unscaled = scaler.inverse_transform(future_predictions)
+                    
+                    # Générer les dates futures à partir de la dernière date dans les données
+                    last_date = data.index[-1]
+                    if intervalle == '1h':
+                        future_dates = pd.date_range(start=last_date + timedelta(hours=1), periods=periods_to_predict, freq='H')
+                    elif intervalle == '1d':
+                        future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=periods_to_predict, freq='D')
+                    elif intervalle == '1wk':
+                        future_dates = pd.date_range(start=last_date + timedelta(weeks=1), periods=periods_to_predict, freq='W')
+                    elif intervalle == '1mo':
+                        future_dates = pd.date_range(start=last_date + timedelta(days=30), periods=periods_to_predict, freq='M')
+                    
+                    # Stocker les prédictions futures et les dates dans l'état de la session
+                    st.session_state.future_predictions = future_predictions_unscaled
+                    st.session_state.future_dates = future_dates
+
+
+    # ==============================================
+    # Affichage des Prédictions et Métriques
+    # ==============================================
+    if st.session_state.model_trained:
+        if st.session_state.predictions_unscaled is not None and st.session_state.actuals_unscaled is not None:
+            mse = st.session_state.mse
+            mae = st.session_state.mae
+
+            st.subheader(f"{lang['mse']} {mse:.4f}")
+            st.subheader(f"{lang['mae']} {mae:.4f}")
+
+            # ==============================================
+            # Affichage des Prédictions vs Réel
+            # ==============================================
+            test_dates = data.index[-len(st.session_state.actuals_unscaled):]
+
+            # Vérifier si 'Close' est bien dans feature_columns
+            close_index = feature_columns.index('Close') if 'Close' in feature_columns else 1
+            st.write(f"Index de la colonne 'Close' utilisée pour les prédictions : {close_index}")
+
+            fig_pred = go.Figure()
+            fig_pred.add_trace(go.Scatter(
+                x=test_dates,
+                y=st.session_state.actuals_unscaled[:, close_index],
+                mode='lines',
+                name='Actual',
+                line=dict(color='blue')
+            ))
+            fig_pred.add_trace(go.Scatter(
+                x=test_dates,
+                y=st.session_state.predictions_unscaled[:, close_index],
+                mode='lines',
+                name='Predicted',
+                line=dict(color='red')
+            ))
+            fig_pred.update_layout(
+                title=f"LSTM Predictions vs Actual Prices for {ticker_input}",
+                xaxis_title=lang['date'],
+                yaxis_title=lang['price'],
+                plot_bgcolor=background_color,
+                paper_bgcolor=background_color,
+                font_color='white',
+                xaxis=dict(gridcolor=grid_color),
+                yaxis=dict(gridcolor=grid_color)
+            )
+            st.plotly_chart(fig_pred, use_container_width=True)
+
+            # ==============================================
+            # Affichage des Prédictions Futures (ajouté)
+            # ==============================================
+            if st.session_state.future_predictions is not None and st.session_state.future_dates is not None:
+                fig_future = go.Figure()
+
+                # Tracer les prédictions actuelles
+                fig_future.add_trace(go.Scatter(
+                    x=test_dates,
+                    y=st.session_state.actuals_unscaled[:, close_index],
+                    mode='lines',
+                    name='Actual',
+                    line=dict(color='blue')
+                ))
+
+                fig_future.add_trace(go.Scatter(
+                    x=test_dates,
+                    y=st.session_state.predictions_unscaled[:, close_index],
+                    mode='lines',
+                    name='Predicted',
+                    line=dict(color='red')
+                ))
+
+                # Tracer les prédictions futures
+                fig_future.add_trace(go.Scatter(
+                    x=st.session_state.future_dates,
+                    y=st.session_state.future_predictions[:, close_index],
+                    mode='lines',
+                    name='Forecasted',
+                    line=dict(color='green', dash='dash')
+                ))
+
+                fig_future.update_layout(
+                    title=f"Prévision LSTM pour {ticker_input}",
+                    xaxis_title=lang['date'],
+                    yaxis_title=lang['price'],
+                    plot_bgcolor=background_color,
+                    paper_bgcolor=background_color,
+                    font_color='white',
+                    xaxis=dict(gridcolor=grid_color),
+                    yaxis=dict(gridcolor=grid_color)
+                )
+                st.plotly_chart(fig_future, use_container_width=True)
+
+
+    # ==============================================
+    # Création du Graphique Principal
+    # ==============================================
     fig = go.Figure()
 
-    # Sélection du type de graphique
+    # Type de graphique
     if chart_type == lang['candlestick']:
         fig.add_trace(go.Candlestick(
             x=data.index,
@@ -361,7 +718,7 @@ else:
             marker_color=main_color
         ))
 
-    # Ajouter les indicateurs techniques
+    # Ajout des Indicateurs Techniques
     if 'SMA' in indicateurs:
         for period in sma_periods:
             if f'SMA_{period}' in data.columns:
@@ -401,210 +758,7 @@ else:
                 name='Bollinger Low'
             ))
 
-    # ==============================================
-    # Modèles de prédiction avec Backtesting
-    # ==============================================
-    if model_choice == 'LSTM':
-        st.sidebar.subheader(lang['model_parameters'])
-        # Paramètres d'entraînement personnalisables
-        epochs = st.sidebar.number_input('Epochs', min_value=1, max_value=50, value=5, step=1)
-        batch_size = st.sidebar.number_input('Batch Size', min_value=16, max_value=256, value=64, step=16)
-        seq_length = st.sidebar.number_input('Sequence Length', min_value=10, max_value=200, value=50, step=10)
-
-        st.write("Running LSTM Backtesting...")
-
-        # Convertir la fréquence de trading en nombre de jours
-        if trading_frequency == "Daily":
-            trading_step = 1
-        elif trading_frequency == "Weekly":
-            trading_step = 5  # Environ 5 jours ouvrables par semaine
-        elif trading_frequency == "Monthly":
-            trading_step = 21  # Environ 21 jours ouvrables par mois
-
-        # Fonction de backtesting pour LSTM
-        def create_sequences(data, seq_length):
-            X = []
-            for i in range(len(data) - seq_length):
-                X.append(data[i:i+seq_length])
-            return np.array(X)
-
-        def lstm_backtesting(data, seq_length, train_window_size, prediction_window_size, step_size):
-            predictions = []
-            actuals = []
-            dates = []
-            start_index = 0
-            end_index = train_window_size
-            iteration = 0  # Compteur d'itérations
-
-            # Initialiser le portefeuille
-            initial_capital = 1000.0
-            capital = initial_capital
-            positions = 0  # Nombre d'unités de l'actif détenues
-            portfolio_values = []  # Valeur du portefeuille au fil du temps
-
-            scaler = MinMaxScaler(feature_range=(0, 1))
-            scaled_data = scaler.fit_transform(data.values.reshape(-1, 1))
-
-            while end_index + prediction_window_size <= len(scaled_data):
-                st.write(f"Iteration {iteration}: start_index={start_index}, end_index={end_index}")
-
-                train_data = scaled_data[start_index:end_index]
-
-                if len(train_data) < seq_length:
-                    st.write("Taille des données d'entraînement insuffisante pour la séquence.")
-                    break
-
-                X_train = create_sequences(train_data, seq_length)
-                Y_train = train_data[seq_length:]
-
-                # Reshape
-                X_train = X_train.reshape((X_train.shape[0], seq_length, 1))
-                Y_train = Y_train.reshape(-1, 1)
-
-                # Construire le modèle
-                model_lstm = tf.keras.models.Sequential([
-                    tf.keras.layers.LSTM(50, return_sequences=True, input_shape=(seq_length, 1)),
-                    tf.keras.layers.LSTM(50),
-                    tf.keras.layers.Dense(1)
-                ])
-                model_lstm.compile(optimizer='adam', loss='mean_squared_error')
-
-                # Entraîner le modèle
-                model_lstm.fit(X_train, Y_train, epochs=epochs, batch_size=batch_size, verbose=0)
-
-                # Prédire
-                test_data = scaled_data[end_index - seq_length:end_index + prediction_window_size]
-                X_test = create_sequences(test_data, seq_length)
-                X_test = X_test.reshape((X_test.shape[0], seq_length, 1))
-
-                forecast = model_lstm.predict(X_test)
-                forecast = scaler.inverse_transform(forecast)
-
-                actual = data.values[end_index:end_index + prediction_window_size]
-
-                # Limiter la longueur si nécessaire
-                min_length = min(len(forecast), len(actual))
-                predictions.extend(forecast[:min_length].flatten())
-                actuals.extend(actual[:min_length])
-                dates.extend(data.index[end_index:end_index + min_length])
-
-                # Simuler la stratégie de trading
-                for i in range(0, min_length, trading_step):
-                    if i + trading_step > min_length:
-                        break
-
-                    # Prix actuel et prédiction
-                    current_price = actual[i]
-                    predicted_price = forecast[i][0]
-
-                    # Décision de trading
-                    if predicted_price > current_price and positions == 0:
-                        # Calcul des frais de transaction
-                        if transaction_fee_type == lang['fixed']:
-                            fee = transaction_fee
-                        else:
-                            fee = transaction_fee * capital
-
-                        if capital <= fee:
-                            st.write(f"Fonds insuffisants pour couvrir les frais à {data.index[end_index + i]}")
-                            continue
-
-                        # Acheter l'actif
-                        capital_after_fee = capital - fee
-                        positions = capital_after_fee / current_price
-                        capital = 0
-                        st.write(f"Achat à {data.index[end_index + i]} au prix de {current_price:.2f}, frais de {fee:.2f}€")
-                    elif predicted_price < current_price and positions > 0:
-                        # Vendre l'actif
-                        proceeds = positions * current_price
-                        if transaction_fee_type == lang['fixed']:
-                            fee = transaction_fee
-                        else:
-                            fee = transaction_fee * proceeds
-
-                        capital = proceeds - fee
-                        positions = 0
-                        st.write(f"Vente à {data.index[end_index + i]} au prix de {current_price:.2f}, frais de {fee:.2f}€")
-
-                    # Calcul de la valeur du portefeuille
-                    portfolio_value = capital + positions * current_price
-                    portfolio_values.append({
-                        'Date': data.index[end_index + i],
-                        'Portfolio Value': portfolio_value
-                    })
-
-                # Avancer la fenêtre
-                start_index += step_size
-                end_index += step_size
-                iteration += 1
-
-            # Vérifier si des prédictions ont été générées
-            if len(predictions) == 0:
-                st.error("Aucune prédiction n'a été générée. Veuillez vérifier les paramètres du backtesting.")
-                return pd.DataFrame(), None, None, None
-
-            # Créer un DataFrame avec les résultats
-            results_df = pd.DataFrame({
-                'Date': dates,
-                'Actual': actuals,
-                'Predicted': predictions
-            }).set_index('Date')
-
-            # Créer un DataFrame pour la valeur du portefeuille
-            portfolio_df = pd.DataFrame(portfolio_values).set_index('Date')
-
-            # Calculer les métriques de performance
-            mse = mean_squared_error(results_df['Actual'], results_df['Predicted'])
-            mae = mean_absolute_error(results_df['Actual'], results_df['Predicted'])
-
-            # Calcul du rendement final
-            final_portfolio_value = capital + positions * data.values[-1]
-            total_return = ((final_portfolio_value - initial_capital) / initial_capital) * 100
-
-            st.write(f"Valeur finale du portefeuille : {final_portfolio_value:.2f}€")
-            st.write(f"Rendement total de la stratégie : {total_return:.2f}%")
-
-            return results_df, mse, mae, portfolio_df
-
-        # Exécuter le backtesting
-        results_df, mse, mae, portfolio_df = lstm_backtesting(model_data['Close'], seq_length, train_window_size, prediction_window_size, step_size)
-
-        # Vérifier si des résultats ont été générés
-        if results_df.empty or portfolio_df is None:
-            st.stop()
-
-        st.write(f"{lang['mse']} {mse:.4f}")
-        st.write(f"{lang['mae']} {mae:.4f}")
-
-        # Tracer les résultats du backtesting
-        fig_backtest = go.Figure()
-        fig_backtest.add_trace(go.Scatter(
-            x=results_df.index,
-            y=results_df['Actual'],
-            mode='lines',
-            name='Actual'
-        ))
-        fig_backtest.add_trace(go.Scatter(
-            x=results_df.index,
-            y=results_df['Predicted'],
-            mode='lines',
-            name='Predicted'
-        ))
-        st.plotly_chart(fig_backtest, use_container_width=True)
-
-        # Tracer la valeur du portefeuille au fil du temps
-        fig_portfolio = go.Figure()
-        fig_portfolio.add_trace(go.Scatter(
-            x=portfolio_df.index,
-            y=portfolio_df['Portfolio Value'],
-            mode='lines',
-            name='Portfolio Value'
-        ))
-        st.plotly_chart(fig_portfolio, use_container_width=True)
-
-    # ==============================================
-    # Personnaliser les couleurs et le thème du graphique
-    # ==============================================
+    # Personnalisation du Graphique Principal
     fig.update_layout(
         title=lang['chart_title'] + actif_selectionne,
         xaxis_title=lang['date'],
@@ -621,18 +775,19 @@ else:
     # Zoom sur l'axe Y
     st.sidebar.header(lang['zoom_yaxis'])
     if st.sidebar.checkbox(lang['yaxis_range']):
-        min_price = st.sidebar.number_input(lang['min_price'], value=float(model_data['Close'].min()))
-        max_price = st.sidebar.number_input(lang['max_price'], value=float(model_data['Close'].max()))
+        min_price = st.sidebar.number_input(lang['min_price'], value=float(data['Close'].min()))
+        max_price = st.sidebar.number_input(lang['max_price'], value=float(data['Close'].max()))
         fig.update_yaxes(range=[min_price, max_price])
 
     # ==============================================
-    # Ajouter des annotations
+    # Ajouter des Annotations
     # ==============================================
     st.sidebar.header(lang['annotations'])
     if st.sidebar.checkbox(lang['add_annotation']):
         annotation_text = st.sidebar.text_input(lang['annotation_text'], '')
-        annotation_date = st.sidebar.date_input(lang['annotation_date'], value=model_data.index[len(model_data)//2])
-        annotation_price = st.sidebar.number_input(lang['annotation_price'], value=float(model_data['Close'].mean()))
+        annotation_date_input = st.sidebar.date_input(lang['annotation_date'], value=datetime.now().date())
+        annotation_date = datetime.combine(annotation_date_input, datetime.min.time())
+        annotation_price = st.sidebar.number_input(lang['annotation_price'], value=float(data['Close'].mean()))
         annotation_color = st.sidebar.color_picker(lang['select_color'], '#FFFFFF')
 
         # Ajouter l'annotation au graphique
@@ -651,9 +806,11 @@ else:
     # Afficher le graphique principal
     st.plotly_chart(fig, use_container_width=True)
 
-    # Afficher les indicateurs supplémentaires (par exemple, MACD)
+    # ==============================================
+    # Afficher les Indicateurs Supplémentaires (MACD)
+    # ==============================================
     if 'MACD' in indicateurs:
-        if 'MACD' in data.columns and 'MACD_Signal' in data.columns and 'MACD_Hist' in data.columns:
+        if all(col in data.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
             fig_macd = go.Figure()
             fig_macd.add_trace(go.Scatter(
                 x=data.index,
@@ -683,8 +840,14 @@ else:
             )
             st.plotly_chart(fig_macd, use_container_width=True)
 
-    # Option pour télécharger les données en CSV
+    st.write("Future Predictions:", st.session_state.future_predictions)
+    st.write("Future Dates:", st.session_state.future_dates)
+
+    # ==============================================
+    # Option pour Télécharger les Données en CSV
+    # ==============================================
     st.sidebar.header(lang['download_data'])
+
     @st.cache_data
     def convertir_csv(df):
         return df.to_csv().encode('utf-8')
